@@ -50,18 +50,7 @@ let position_in_state_var_list sv svl =
     | [] -> -1
     | s :: vl' -> if v = s then i else position_from_start v vl' (i+1)
   in position_from_start sv svl 0
-(**
-let rec get_var_position vl vtl = 
-  match vl with
-  | [] -> print_endline "invalid nested variable encountered."; exit 1
-  | [v] -> position_in_var_list v vtl
-  | v :: vl' -> let pv = position_in_var_list v vtl in 
-		if (pv = -1) then (print_endline (v^" is not defined."); exit 1) else 
-		  (let vt = snd (List.nth vtl pv) in 
-		   match vt with
-		   | Module_type m -> pv + (get_var_position vl' m.var_list)
-		   | _ -> print_endline (v^" is not a Module."); exit 1)
-**)
+
 (*******tmp function*******)
 let rec str_str_list sl = 
 	match sl with
@@ -70,8 +59,6 @@ let rec str_str_list sl =
 	| s :: sl' -> s^","^(str_str_list sl')
 
 (**************************)
-
-
 let rec find_scalar_position sc vtl = 
   let rec find_str_position s sl i = 
     match sl with
@@ -127,6 +114,7 @@ let parse_error s = print_endline s
 %token <bool>B
 
 //%left Add Minus Mult Ando Oro Nego Mod Neg Equal And Or Scalar
+%nonassoc DotDot
 %left Or
 %left And
 %left Oro
@@ -134,7 +122,8 @@ let parse_error s = print_endline s
 %left Add Minus
 %left Mult
 %left Equal Non_equal LT GT LE GE Mod
-%left Nego
+%left Nego Neg
+%left Dot
 
 
 %start input
@@ -256,22 +245,9 @@ var_decl: Var LB3 vars RB3 {tmp_var_list := $3}
 vars: 	{[]}
 	| Id Colon expr_type Semicolon vars	{($1, $3)::$5}
 	| Id Colon expr_type LB2 exp RB2 Semicolon vars	{($1, Array_type ($3, $5)) :: $8}
-/*		
-{	let tmp_vt = ref [] in
-			for i=0 to ($5 - 1) do 
-				tmp_vt := ($1 ^ "_" ^  (string_of_int i), $3) :: !tmp_vt
-			done; !tmp_vt @ $8
-		}
-*/
 ;
 
 symbol_decl: Define LB3 symbols RB3	{}
-/*
-  {let undef_s = check_current_symbols !tmp_symbol_tbl in
-   if undef_s = "" then ()
-   else print_endline (undef_s^" is not defined."); 
-   exit 1}
-*/
 ;
 
 symbols: 	{}
@@ -283,14 +259,6 @@ dexp:
 	| B	{Const (if $1 then 1 else 0)}
 	| Id	{Vars $1}
 	| Id LB2 dexp RB2	{Vars_index ($1, $3)}
-/*	    
-{let i1 = position_in_var_list $1 !tmp_parameter_list in 
-	     if (i1 <> -1) then (Parameter $1) 
-	     else 
-	       let i2 = position_in_var_list $1 !tmp_var_list in 
-	       if(i2 <> -1) then (Var i2) 
-	       else (Symbol $1)}
-*/
 	| dnested_var 	{$1}
 	| Scalar Id
 	    {let i = find_scalar_position $2 !tmp_var_list in 
@@ -319,7 +287,7 @@ dnested_var: Id Dot Id	{Nested_vars (Vars $1, Vars $3)}
 	| Id LB2 dexp RB2 Dot Id LB2 dexp RB2	{Nested_vars (Vars_index ($1, $3), Vars_index ($6, $8))}
 	| Id Dot dnested_var		{Nested_vars (Vars $1, $3)}
 	| Id LB2 dexp RB2 Dot dnested_var	{Nested_vars (Vars_index ($1, $3), $6)}
-	| LB1 dnested_var RB1	{$2}
+//	| LB1 dnested_var RB1	{$2}
 ;
 
 init_decl: Init LB3 inis RB3
@@ -329,21 +297,42 @@ init_decl: Init LB3 inis RB3
 inis: 	{[]}
 	| Id Assigno exp Semicolon inis	{(Expr $3) :: $5}
 	| Id Assigno LB3 exps RB3 Semicolon inis	{(Expr (Aray $4)) :: $7}
-/*
-		{	let tmp_exps_list = ref [] 
-			and tmp_exps = $4 in
-			for i=0 to (List.length tmp_exps) - 1 do
-				tmp_exps_list := (Expr (List.ith tmp_exps i)) :: !tmp_exps_list
-			done; !tmp_exps_list @ $7
-		}
-*/
-	| Id Assigno Id LB1 exps RB1 Semicolon inis
-	    {(Module_instance ($3, $5)) :: $8}
+	| Id Assigno LB3 exp RB3 Semicolon inis 	{(Expr (Aray [$4])) :: $7}
+	| Id Assigno Id LB1 exps RB1 Semicolon inis {(Module_instance ($3, $5)) :: $8}
+	| Id Assigno Id LB1 exp RB1 Semicolon inis {(Module_instance ($3, [$5])) :: $8}
+	| Id Assigno Id LB1 RB1 Semicolon inis {(Module_instance ($3, [])) :: $7}
 ;
 
-exps: 	{[]}
-	| exp	{[$1]}
-	| exp Comma exps {$1 :: $3}
+exps: exp Comma exp	{[$1; $3]}
+	| exp Comma exps	{$1 :: $3}
+	/* | exp Comma exps {$1 :: $3} */
+;
+
+state_expr: 
+		  I	{Const $1}
+		| B	{Const (if $1 then 1 else 0)}
+		| Id LB1 exp RB1	{let i1 = position_in_state_var_list $1 !tmp_state_var_list in 
+								if (i1 = -1) then
+								begin
+								print_endline ("state variable "^$1^" is not defined."); 
+								exit 1;
+								end;
+								State_expr (i1, $3)}
+		| Minus state_expr	{Negi $2}
+		| Nego state_expr {Negb $2}
+		| state_expr Equal state_expr	{Equal ($1, $3)}
+		| state_expr Non_equal state_expr	{Negb (Equal ($1, $3))}
+		| state_expr Ando state_expr	{Ando ($1, $3)}
+		| state_expr Oro state_expr	{Oro ($1, $3)}
+		| state_expr Add state_expr	{Add ($1, $3)}
+		| state_expr Minus state_expr	{Minus ($1, $3)}
+		| state_expr Mult state_expr	{Mult ($1, $3)}
+		| state_expr Mod state_expr	{Mod ($1, $3)}
+		| state_expr LT state_expr	{LT ($1, $3)}
+		| state_expr GT state_expr	{GT ($1, $3)}
+		| state_expr LE state_expr	{LE ($1, $3)}
+		| state_expr GE state_expr	{GE ($1, $3)}
+		| LB1 state_expr RB1	{$2}
 ;
 
 exp:	
@@ -351,25 +340,7 @@ exp:
 	| B	{Const (if $1 then 1 else 0)}
 	| Id	{Vars $1}
 	| Id LB2 exp RB2	{Vars_index ($1, $3)}
-/*
-{let i1 = position_in_var_list $1 !tmp_parameter_list in 
-		 if (i1 <> -1) then (Parameter $1) else 
-		   (let i2 = position_in_var_list $1 !tmp_var_list in 
-		    if(i2 <> -1) then (Var i2) else 
-		      (Symbol $1))}
-*/
-	| Id LB1 exp RB1	
-	    {let i1 = position_in_state_var_list $1 !tmp_state_var_list in 
-	     if (i1 = -1) then
-	       begin
-		 print_endline ("state variable "^$1^" is not defined."); 
-		 exit 1;
-	       end;
-		 State_expr (i1, $3)}
 	| nested_var 	{$1}
-/*
-{Var (get_var_position $1 !tmp_var_list)}
-*/
 	| Scalar Id	
 	    {let i = find_scalar_position $2 !tmp_var_list in
 	     if i = -1 then (print_endline ("unknown type for "^$2); exit 1)
@@ -397,7 +368,7 @@ nested_var: Id Dot Id	{Nested_vars (Vars $1, Vars $3)}
 	| Id LB2 exp RB2 Dot Id LB2 exp RB2	{Nested_vars (Vars_index ($1, $3), Vars_index ($6, $8))}
 	| Id Dot nested_var		{Nested_vars (Vars $1, $3)}
 	| Id LB2 exp RB2 Dot nested_var	{Nested_vars (Vars_index ($1, $3), $6)}
-	| LB1 nested_var RB1	{$2}
+//	| LB1 nested_var RB1	{$2}
 ;
 
 trans_decl: Transition LB3 trans RB3	
@@ -421,7 +392,7 @@ fairness_decl: Fairness LB3 fairness RB3	{tmp_fairness := $3}
 ;
 
 fairness:	{[]}
-	| Id LB1 Id RB1 Semicolon fairness	{(Atomic($1, [SVar $3])) :: $6}
+	/* | Id LB1 Id RB1 Semicolon fairness	{(Atomic($1, [SVar $3])) :: $6} */
 	| fml Semicolon fairness	{$1 :: $3}
 ;
 
@@ -439,7 +410,7 @@ atomic_decl: Atomic LB3 atomics RB3
 ;
 
 atomics: 	{}
-	| atomics Id LB1 bound_var RB1 Assigno exp Semicolon	
+	| atomics Id LB1 bound_var RB1 Assigno state_expr Semicolon	
 	    {Hashtbl.add !tmp_atomic_tbl $2 $7}
 ;
 
@@ -462,6 +433,8 @@ specs: 	{[]}
 fml: 	Top	{Top}
 	| Bottom	{Bottom}
 	| Id LB1 atom_fml_para RB1	{Atomic ($1, $3)}
+	| Id LB1 RB1	{Atomic ($1, [])}
+	| Id LB1 Id RB1	{Atomic ($1, [SVar $3])}
 	| Neg fml	{Neg $2}
 	| fml And fml	{And ($1, $3)}
 	| fml Or fml	{Or ($1, $3)}
@@ -476,10 +449,8 @@ fml: 	Top	{Top}
 	| LB1 fml RB1 	{$2}
 ; 
 
-atom_fml_para: 	{[]}
-	| Id	{[SVar $1]}
+atom_fml_para: Id Comma Id 	{[(SVar $1); (SVar $3)]}
 	| Id Comma atom_fml_para	{(SVar $1) :: $3}
 ;
 
 %%
-
